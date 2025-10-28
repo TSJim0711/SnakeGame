@@ -22,7 +22,8 @@ using namespace std;
 #define GAME_BOARD_SIZE_Y 12
 
 #define GAME_START_POS_X 15
-#define GAME_START_POS_Y 6
+#define GAME_START_POS_Y 3
+
 #define GAME_START_DIR MoveDown
 
 class SnakeGame
@@ -41,6 +42,12 @@ public:
         gameActiveFlag=true;
         srand(time(nullptr));//seed for gen reward
 
+        placeProp(propReward);//init world
+        placeBuild(buildWall,zone{pos{1,2},pos{GAME_BOARD_SIZE_X,2}});
+        placeBuild(buildWall,zone{pos{GAME_BOARD_SIZE_X,2},pos{GAME_BOARD_SIZE_X,GAME_BOARD_SIZE_Y}});
+        placeBuild(buildWall,zone{pos{1,1},pos{1,GAME_BOARD_SIZE_Y}});
+        placeBuild(buildWall,zone{pos{1,GAME_BOARD_SIZE_Y},pos{GAME_BOARD_SIZE_X,GAME_BOARD_SIZE_Y}});
+
         thread thdSnakeLife(&SnakeGame::snakeLife,this);//snake move
         thread thdRender(&SnakeGame::render,this);//print on screen
         thread thdControl(&SnakeGame::userControl,this);//lisen to input
@@ -55,8 +62,7 @@ public:
         //snake born
         alterSnake(1,pos{GAME_START_POS_X-(abs(GAME_START_DIR)==1?GAME_START_DIR*2:0),GAME_START_POS_Y-(abs(GAME_START_DIR)==2?(GAME_START_DIR/10*2):0)});
         alterSnake(1,pos{GAME_START_POS_X-(abs(GAME_START_DIR)==1?GAME_START_DIR*1:0),GAME_START_POS_Y-(abs(GAME_START_DIR)==2?(GAME_START_DIR/10*1):0)});
-        alterSnake(1,pos{20,10});
-        placeProp(propReward);
+        alterSnake(1,pos{GAME_START_POS_X,GAME_START_POS_Y});
         curMoveDir=GAME_START_DIR;
 
         //snake life
@@ -64,7 +70,7 @@ public:
         while(gameActiveFlag)
         {
             newStep={snake.front().x+(abs(curMoveDir)==1?curMoveDir:0),snake.front().y+(abs(curMoveDir)==2?((curMoveDir/2)):0)};
-            if(hitSnake(newStep))
+            if(hit(newStep))
                 throw logic_error("It hurt!");//snake eat itself
             alterSnake(1,newStep);
             
@@ -95,12 +101,12 @@ public:
         tcsetattr(STDIN_FILENO, TCSANOW, &new_settings);//set terminal to no echo
         system("clear");
         renderGuideLock.lock();
-        nextRefreshGuide->push(refreshSlot{{1,0},'S'});
-        nextRefreshGuide->push(refreshSlot{{2,0},'c'});
-        nextRefreshGuide->push(refreshSlot{{3,0},'o'});
-        nextRefreshGuide->push(refreshSlot{{4,0},'r'});
-        nextRefreshGuide->push(refreshSlot{{5,0},'e'});
-        nextRefreshGuide->push(refreshSlot{{6,0},':'});
+        nextRefreshGuide->push(refreshSlot{'S',{1,0}});
+        nextRefreshGuide->push(refreshSlot{'c',{2,0}});
+        nextRefreshGuide->push(refreshSlot{'o',{3,0}});
+        nextRefreshGuide->push(refreshSlot{'r',{4,0}});
+        nextRefreshGuide->push(refreshSlot{'e',{5,0}});
+        nextRefreshGuide->push(refreshSlot{':',{6,0}});
         renderGuideLock.unlock();
         addScore(0);//let score num render
         while(gameActiveFlag)
@@ -152,6 +158,9 @@ private:
     float gameBoost,gameSpeedRate;
     bool gameActiveFlag;
 
+    enum prop {propAir=' ',propReward='*', propGreatReward='#', propConcerta='%'/*利他能 increase speed, increase score*/};    
+    enum content {snakeGone=' ', snakeHead='H',snakeBody='B', snakeTail='T', snakeFood='*'};
+    enum mapBuild {buildWall='W', buildPortal='P'};
     struct pos
     {
         int x;
@@ -163,16 +172,29 @@ private:
         pos DR;//downright
     };
     deque<pos> snake;
-    enum prop {propAir='\0',propReward='*', propGreatReward='#', propConcerta='%'/*利他能 increase speed, increase score*/};    
 
-    enum content {snakeGone=' ', snakeHead='H',snakeBody='B', snakeTail='T', snakeFood='*'};
     struct refreshSlot
     {
-        pos p;
         char cnt;
+        pos p;
     };
     queue<refreshSlot> refreshGuide1,refreshGuide2;
     queue<refreshSlot>* curRefreshGuide,*nextRefreshGuide,*temp;
+
+    struct propIntel
+    {
+        prop pr;
+        pos po;
+    };
+    list<propIntel> onlinePropList;
+
+    struct buildingIntel
+    {
+        mapBuild mb;
+        zone z;
+    };
+    list<buildingIntel> buildingList;
+
     void alterSnake(int growORcut, pos p={1, 1})
     {
         //printf("{%d:%d,%d}",growORcut,p.x,p.y);
@@ -181,16 +203,16 @@ private:
         if(growORcut==1)//move snake head
         {
             snake.emplace_front(p);
-            nextRefreshGuide->push(refreshSlot{p,snakeHead});
-            nextRefreshGuide->push(refreshSlot{pos {(snake.begin()+1)->x,(snake.begin()+1)->y},snakeBody});//set old head as body
+            nextRefreshGuide->push(refreshSlot{snakeHead,p});
+            nextRefreshGuide->push(refreshSlot{snakeBody,pos {(snake.begin()+1)->x,(snake.begin()+1)->y}});//set old head as body
         }
         if(growORcut==-1)//cut snake tail
         {
             p=snake.back();//get pos snake got cut
-            nextRefreshGuide->push(refreshSlot{p,snakeGone});
+            nextRefreshGuide->push(refreshSlot{snakeGone,p});
             snake.pop_back();
             p=snake.back();//now last is the tail
-            nextRefreshGuide->push(refreshSlot{p,snakeTail});
+            nextRefreshGuide->push(refreshSlot{snakeTail,p});
         }
         snakeLock.unlock();
         renderGuideLock.unlock();
@@ -204,18 +226,12 @@ private:
         for(int i=5;i>=0;i--)
         {
             digit=tempScore/pow(10,i);
-            nextRefreshGuide->push(refreshSlot{{7+5-i,0},(char)('0'+(int)digit)});//update score on screen
+            nextRefreshGuide->push(refreshSlot{(char)('0'+(int)digit),{7+5-i,0}});//update score on screen
             tempScore=tempScore-digit*pow(10,i);
         }
         renderGuideLock.unlock();
     }
 
-    struct propIntel
-    {
-        pos po;
-        prop pr;
-    };
-    list<propIntel> onlinePropList;
     void placeProp(prop prp)
     {
         pos propPos;
@@ -224,12 +240,11 @@ private:
         {
             propPos={rand()%(GAME_BOARD_SIZE_X-4) +2,rand()%(GAME_BOARD_SIZE_Y-4) +2};//not placing reward on edge
         }
-            
-        while(hitSnake(propPos));
+        while(hit(propPos));
         snakeLock.unlock();
         renderGuideLock.lock();
-        onlinePropList.insert(onlinePropList.end(),propIntel{propPos,prp});
-        nextRefreshGuide->push(refreshSlot{propPos,prp});
+        onlinePropList.insert(onlinePropList.end(),propIntel{prp,propPos});
+        nextRefreshGuide->push(refreshSlot{prp,propPos});
         renderGuideLock.unlock();
     }
     float rewardWeight=1;
@@ -266,19 +281,43 @@ private:
         return propAir;
     }
 
-    bool hitSnake(pos snakePos)
+    void placeBuild(mapBuild buildType, zone z)
     {
-        for(const pos snakeBodyIdx:snake)
+        buildingIntel newBuild;
+        newBuild.mb=buildType;
+        newBuild.z=z;
+        buildingList.push_back(newBuild);
+
+        renderGuideLock.lock();
+        for(int x=z.UL.x;x<=z.DR.x;x++)//render the building
+            for(int y=z.UL.y;y<=z.DR.y;y++)
+                nextRefreshGuide->push(refreshSlot{buildType,pos{x,y}});
+        renderGuideLock.unlock();
+    }
+    bool hit(pos snakePos)
+    {
+        for(const pos snakeBodyIdx:snake)//hit snake body
         {
-            if(snakeBodyIdx.x==snakePos.x && snakeBodyIdx.y==snakePos.y)
+            if(snakePos.x==snakeBodyIdx.x && snakePos.y==snakeBodyIdx.y)
                 return true;
         }
+        for(const buildingIntel buildingsIdx:buildingList)//hit into building (not all buildings cause hit, like portal)
+        {
+            if((snakePos.x>=buildingsIdx.z.UL.x&&snakePos.x<=buildingsIdx.z.DR.x) && (snakePos.y>=buildingsIdx.z.UL.y&&snakePos.y<=buildingsIdx.z.DR.y))//run into something?
+            {
+                if(buildingsIdx.mb==buildWall)
+                    return true;
+                if(buildingsIdx.mb==buildPortal)
+                {/*IDK how to achieve that, I should ask Yeshua or buddha?*/}
+            }
+        }
         return false;
-    }
+    }    
 };
 
 int main()
 {
     SnakeGame game;
     cout<<"Done."<<endl;
-}
+    return 0;
+};
