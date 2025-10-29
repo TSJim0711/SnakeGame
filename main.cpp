@@ -1,5 +1,6 @@
 #include <iostream>
 #include <exception>
+#include <string>
 
 #include <queue>
 #include <deque>
@@ -26,6 +27,7 @@ using namespace std;
 
 #define GAME_START_DIR MoveDown
 
+bool playagainFlag;
 class SnakeGame
 {
 public:
@@ -69,9 +71,13 @@ public:
         pos newStep;
         while(gameActiveFlag)
         {
+            snakeLock.lock()//lock to access snake deque and curmove
             newStep={snake.front().x+(abs(curMoveDir)==1?curMoveDir:0),snake.front().y+(abs(curMoveDir)==2?((curMoveDir/2)):0)};
+            snakeLock.unlock();
             if(hit(newStep))
-                throw logic_error("It hurt!");//snake eat itself
+            {
+                gameActiveFlag=false;
+            }
             alterSnake(1,newStep);
             
             prop curProp=isGetProp(newStep);
@@ -128,13 +134,14 @@ public:
             this_thread::sleep_for(chrono::milliseconds((int)(1000/FRAME_RATE)));//30 fps defualt
         }
         system("clear");
+        cout<<"Game End. Score: "<<score<<endl<<"Wanna play again? [y/N (defualt)]:"<<endl;//make user type, let userControl stop waiting in getchar and join
         tcsetattr(STDIN_FILENO, TCSANOW, &old_settings);//set terminal to echo
     }
 
     void userControl()
     {
         char inpt;
-        while (gameActiveFlag)
+        while (true)
         {
             inpt=getchar();
             snakeLock.lock();
@@ -147,10 +154,22 @@ public:
             else if(inpt=='d'&& curMoveDir!=MoveLeft)
                 curMoveDir=MoveRight;
             snakeLock.unlock();
+
+            if(gameActiveFlag==false)//game end, receive respond "wanna play again"
+            {  
+                if(inpt=='y'|| inpt=='Y')
+                {
+                    playagainFlag=true;
+                    break;
+                }
+                else
+                {
+                    break;
+                }
+            }
             if (inpt=='\033')//esc key
                 gameActiveFlag=false;
         }
-
     }
 
 private:
@@ -317,7 +336,13 @@ private:
 
 int main()
 {
-    SnakeGame game;
-    cout<<"Done."<<endl;
+    do
+    {
+        playagainFlag=false;
+        if(true)
+            SnakeGame game;
+    }while(playagainFlag);
+    
+    cout<<"Thank you for playing."<<endl;
     return 0;
 };
