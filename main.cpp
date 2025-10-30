@@ -1,10 +1,13 @@
 #include <iostream>
+#include <unistd.h>
+#include <fcntl.h>
 #include <exception>
 #include <string>
 
 #include <queue>
 #include <deque>
 #include <list>
+#include <unordered_map>
 
 #include <thread>
 #include <mutex>
@@ -19,13 +22,89 @@ using namespace std;
 
 #define FRAME_RATE 30
 
-#define GAME_BOARD_SIZE_X 30
-#define GAME_BOARD_SIZE_Y 12
+#define SCREEN_SIZE_X 800
+#define SCREEN_SIZE_Y 480
+#define GAME_BOARD_SIZE_X 26
+#define GAME_BOARD_SIZE_Y 16
+#define PIXEL_PER_SLOT 30
+#define GLOBE_ASSET_STORE_LOC "./assets/"
 
 #define GAME_START_POS_X 15
 #define GAME_START_POS_Y 3
-
 #define GAME_START_DIR MoveDown
+
+struct pos
+{
+    int x;
+    int y;
+};
+struct zone
+{
+    pos UL;//upleft
+    pos DR;//downright
+};
+
+
+class screenOutput
+{
+public:
+    screenOutput()
+    {
+        screenfd=open ("/dev/fb0",O_TRUNC | O_RDWR);
+        if(screenfd!=-1)
+        {
+            lseek(screenfd, 0, SEEK_SET); 
+            final=0;//fill black background, fill with 0
+            for(int y=0;y<SCREEN_SIZE_Y;y++)
+                for(int x=0;x<SCREEN_SIZE_X;x++)
+                    write(screenfd,&final,3);
+        }
+        else
+        {
+            perror("Error open screen:");
+            cout<<"Play it on just terminal :)"<<endl;
+        }   
+    };
+    
+    void updateScreen(pos ULpos, string assetName)
+    {
+        string assetLoc= GLOBE_ASSET_STORE_LOC + assetName;
+        assestBMP=fopen(assetLoc.c_str(),"r");
+        if(assestBMP!=NULL)//make sure screen  and assest file is open
+        {
+            for(int y=ULpos.y;y<ULpos.y+PIXEL_PER_SLOT;y++)
+            {
+                fseek(assestBMP,54+((29-y-ULpos.y)*92),SEEK_SET);//pad to 4 byte 90 ->92
+                lseek(screenfd, (y*800+ULpos.x)*4, SEEK_SET);//row size is 800 pixel
+                for(int x=0;x<PIXEL_PER_SLOT;x++)
+                {
+                    fread(&midway_b,1,1,assestBMP);
+                    fread(&midway_g,1,1,assestBMP);
+                    fread(&midway_r,1,1,assestBMP);
+                    final=0;
+                    final|=midway_b;//BGR->ARGB
+                    final|=midway_g<<8;
+                    final|=midway_r<<16;
+                    write(screenfd,&final,4);
+                }
+            }    
+        }
+        fclose(assestBMP);
+    }
+
+    ~screenOutput()
+    {
+        if (screenfd!=-1)
+            close(screenfd);
+        if(assestBMP==NULL)
+            fclose(assestBMP);
+    };
+private:
+    int screenfd=-1;
+    FILE* assestBMP=NULL;
+    unsigned char midway_r,midway_g,midway_b;//.bmp color
+    int final;
+};
 
 bool playagainFlag;
 class SnakeGame
@@ -43,6 +122,30 @@ public:
         nextRefreshGuide=&refreshGuide2;
         gameActiveFlag=true;
         srand(time(nullptr));//seed for gen reward
+
+        assetsMap.emplace(snakeGone,"black.bmp");
+        assetsMap.emplace(snakeHead,"snakeHead.bmp");
+        assetsMap.emplace(snakeBody,"snakeBody.bmp");
+        assetsMap.emplace(snakeTail,"snakeTail.bmp");
+
+        assetsMap.emplace(propAir,"black.bmp");
+        assetsMap.emplace(propReward,"whiteSmallDot.bmp");
+        assetsMap.emplace(propGreatReward,"redDot.bmp");
+        assetsMap.emplace(propConcerta,"lighting.bmp");
+        assetsMap.emplace(buildWall,"wall.bmp");
+
+        assetsMap.emplace('S',"letter_S.bmp");
+        assetsMap.emplace('c',"letter_c.bmp");
+        assetsMap.emplace('o',"letter_o.bmp");
+        assetsMap.emplace('r',"letter_r.bmp");
+        assetsMap.emplace('e',"letter_e.bmp");
+        assetsMap.emplace(':',"letter_colon.bmp");
+
+        assetsMap.emplace('0',"num_0.bmp");
+        assetsMap.emplace('1',"num_1.bmp");
+        assetsMap.emplace('2',"num_2.bmp");
+        assetsMap.emplace('5',"num_5.bmp");
+        
 
         placeProp(propReward);//init world
         placeBuild(buildWall,zone{pos{1,2},pos{GAME_BOARD_SIZE_X,2}});
@@ -71,7 +174,7 @@ public:
         pos newStep;
         while(gameActiveFlag)
         {
-            snakeLock.lock()//lock to access snake deque and curmove
+            snakeLock.lock();//lock to access snake deque and curmove
             newStep={snake.front().x+(abs(curMoveDir)==1?curMoveDir:0),snake.front().y+(abs(curMoveDir)==2?((curMoveDir/2)):0)};
             snakeLock.unlock();
             if(hit(newStep))
@@ -91,7 +194,7 @@ public:
             }
             else
                 alterSnake(-1);
-            this_thread::sleep_for(chrono::milliseconds(max((int)(200*gameSpeedRate),50)));//every 0.5+ per step
+            this_thread::sleep_for(chrono::milliseconds(max((int)(500*gameSpeedRate),50)));//every 0.2- per step
         }
     }
 
@@ -105,14 +208,15 @@ public:
         new_settings = old_settings;
         new_settings.c_lflag &= ~(ICANON | ECHO);
         tcsetattr(STDIN_FILENO, TCSANOW, &new_settings);//set terminal to no echo
+        screenOutput classScreenOutput;
         system("clear");
         renderGuideLock.lock();
-        nextRefreshGuide->push(refreshSlot{'S',{1,0}});
-        nextRefreshGuide->push(refreshSlot{'c',{2,0}});
-        nextRefreshGuide->push(refreshSlot{'o',{3,0}});
-        nextRefreshGuide->push(refreshSlot{'r',{4,0}});
-        nextRefreshGuide->push(refreshSlot{'e',{5,0}});
-        nextRefreshGuide->push(refreshSlot{':',{6,0}});
+        nextRefreshGuide->push(refreshSlot{'S',{1,1}});
+        nextRefreshGuide->push(refreshSlot{'c',{2,1}});
+        nextRefreshGuide->push(refreshSlot{'o',{3,1}});
+        nextRefreshGuide->push(refreshSlot{'r',{4,1}});
+        nextRefreshGuide->push(refreshSlot{'e',{5,1}});
+        nextRefreshGuide->push(refreshSlot{':',{6,1}});
         renderGuideLock.unlock();
         addScore(0);//let score num render
         while(gameActiveFlag)
@@ -121,6 +225,7 @@ public:
             temp=curRefreshGuide;//switch
             curRefreshGuide=nextRefreshGuide;
             nextRefreshGuide=temp;
+            unordered_map <char,string>::iterator assetsLoc;//handle return from find() of this map
             while(curRefreshGuide->empty()==0)//load all slot need to be refresh
             {
                 //printf("Bp1:%c\n",refreshing.cnt);
@@ -128,6 +233,11 @@ public:
                 curRefreshGuide->pop();
                 //printf("[\03322;22H%c",refreshing.cnt);//draw
                 cout<<"\033["<<refreshing.p.y<<";"<<refreshing.p.x<<"H"<<(char)refreshing.cnt;
+                assetsLoc=assetsMap.find(refreshing.cnt);//find assetsLocation from this map
+                if(assetsLoc!=assetsMap.end())//check if found
+                    classScreenOutput.updateScreen(pos{(refreshing.p.x-1)*PIXEL_PER_SLOT,(refreshing.p.y-1)*PIXEL_PER_SLOT},assetsLoc->second);//not found, load placeholder instead
+                else
+                    classScreenOutput.updateScreen(pos{(refreshing.p.x-1)*PIXEL_PER_SLOT,(refreshing.p.y-1)*PIXEL_PER_SLOT},"placeholder.bmp");//not found, load placeholder instead
             }
             renderGuideLock.unlock();
             fflush(stdout);
@@ -171,25 +281,14 @@ public:
                 gameActiveFlag=false;
         }
     }
-
 private:
     int score,hiScore;
     float gameBoost,gameSpeedRate;
     bool gameActiveFlag;
 
     enum prop {propAir=' ',propReward='*', propGreatReward='#', propConcerta='%'/*利他能 increase speed, increase score*/};    
-    enum content {snakeGone=' ', snakeHead='H',snakeBody='B', snakeTail='T', snakeFood='*'};
+    enum content {snakeGone=' ', snakeHead='H',snakeBody='B', snakeTail='T'};
     enum mapBuild {buildWall='W', buildPortal='P'};
-    struct pos
-    {
-        int x;
-        int y;
-    };
-    struct zone
-    {
-        pos UL;//upleft
-        pos DR;//downright
-    };
     deque<pos> snake;
 
     struct refreshSlot
@@ -199,6 +298,7 @@ private:
     };
     queue<refreshSlot> refreshGuide1,refreshGuide2;
     queue<refreshSlot>* curRefreshGuide,*nextRefreshGuide,*temp;
+    unordered_map <char,string> assetsMap;//point to bmp file assests location of prop/build/snake...
 
     struct propIntel
     {
@@ -216,7 +316,6 @@ private:
 
     void alterSnake(int growORcut, pos p={1, 1})
     {
-        //printf("{%d:%d,%d}",growORcut,p.x,p.y);
         snakeLock.lock();
         renderGuideLock.lock();
         if(growORcut==1)//move snake head
@@ -245,7 +344,7 @@ private:
         for(int i=5;i>=0;i--)
         {
             digit=tempScore/pow(10,i);
-            nextRefreshGuide->push(refreshSlot{(char)('0'+(int)digit),{7+5-i,0}});//update score on screen
+            nextRefreshGuide->push(refreshSlot{(char)('0'+(int)digit),{7+5-i,1}});//update score on screen
             tempScore=tempScore-digit*pow(10,i);
         }
         renderGuideLock.unlock();
