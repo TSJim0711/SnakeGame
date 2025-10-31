@@ -1,8 +1,9 @@
 #include <iostream>
 #include <unistd.h>
 #include <fcntl.h>
-#include <exception>
+#include <sys/mman.h>
 #include <string>
+#include <cstring>
 
 #include <queue>
 #include <deque>
@@ -51,13 +52,15 @@ public:
     screenOutput()
     {
         screenfd=open ("/dev/fb0",O_TRUNC | O_RDWR);
-        if(screenfd!=-1)
+        if(screenfd>=0)
         {
             lseek(screenfd, 0, SEEK_SET); 
-            final=0;//fill black background, fill with 0
-            for(int y=0;y<SCREEN_SIZE_Y;y++)
-                for(int x=0;x<SCREEN_SIZE_X;x++)
-                    write(screenfd,&final,3);
+            screenMem=(int*)mmap(NULL,800*480*4,PROT_READ|PROT_WRITE,MAP_SHARED,screenfd,0);//gwt screen head addr
+            if (screenMem==NULL)
+                perror("映射错误：");
+            else
+                for(int i=0; i<800*480; i++)
+		            screenMem[i]=0x00;//draw black background
         }
         else
         {
@@ -68,24 +71,20 @@ public:
     
     void updateScreen(pos ULpos, string assetName)
     {
+        if(ULpos.x<0||ULpos.y<0)
+            return;
         string assetLoc= GLOBE_ASSET_STORE_LOC + assetName;
         assestBMP=fopen(assetLoc.c_str(),"r");
         if(assestBMP!=NULL)//make sure screen  and assest file is open
         {
             for(int y=ULpos.y;y<ULpos.y+PIXEL_PER_SLOT;y++)
             {
-                fseek(assestBMP,54+((29-y-ULpos.y)*92),SEEK_SET);//pad to 4 byte 90 ->92
-                lseek(screenfd, (y*800+ULpos.x)*4, SEEK_SET);//row size is 800 pixel
+                fseek(assestBMP,54+((29-(y-ULpos.y))*92),SEEK_SET);//pad to 4 byte 90 ->92
+                memset(buffer,0,sizeof(buffer));
                 for(int x=0;x<PIXEL_PER_SLOT;x++)
                 {
-                    fread(&midway_b,1,1,assestBMP);
-                    fread(&midway_g,1,1,assestBMP);
-                    fread(&midway_r,1,1,assestBMP);
-                    final=0;
-                    final|=midway_b;//BGR->ARGB
-                    final|=midway_g<<8;
-                    final|=midway_r<<16;
-                    write(screenfd,&final,4);
+                    fread(&midwayBGR,1,3,assestBMP);
+                    screenMem[(y*800+ULpos.x+x)]=0x00<<24|midwayBGR[2]<<16|midwayBGR[1]<<8|midwayBGR[0];
                 }
             }    
         }
@@ -95,15 +94,19 @@ public:
     ~screenOutput()
     {
         if (screenfd!=-1)
+        {
             close(screenfd);
+            munmap((void*)screenMem,800*480*4);
+        }
         if(assestBMP==NULL)
             fclose(assestBMP);
     };
 private:
     int screenfd=-1;
+    int* screenMem;
     FILE* assestBMP=NULL;
-    unsigned char midway_r,midway_g,midway_b;//.bmp color
-    int final;
+    unsigned char midwayBGR[3], midwayA=0;//.bmp color
+    unsigned char buffer[PIXEL_PER_SLOT*4]={};
 };
 
 bool playagainFlag;
@@ -231,13 +234,16 @@ public:
                 //printf("Bp1:%c\n",refreshing.cnt);
                 refreshing=curRefreshGuide->front();
                 curRefreshGuide->pop();
-                //printf("[\03322;22H%c",refreshing.cnt);//draw
-                cout<<"\033["<<refreshing.p.y<<";"<<refreshing.p.x<<"H"<<(char)refreshing.cnt;
+                cout<<"\033["<<refreshing.p.y<<";"<<refreshing.p.x<<"H"<<(char)refreshing.cnt;//draw on terminal
                 assetsLoc=assetsMap.find(refreshing.cnt);//find assetsLocation from this map
                 if(assetsLoc!=assetsMap.end())//check if found
+                {
                     classScreenOutput.updateScreen(pos{(refreshing.p.x-1)*PIXEL_PER_SLOT,(refreshing.p.y-1)*PIXEL_PER_SLOT},assetsLoc->second);//not found, load placeholder instead
+                }
                 else
+                {
                     classScreenOutput.updateScreen(pos{(refreshing.p.x-1)*PIXEL_PER_SLOT,(refreshing.p.y-1)*PIXEL_PER_SLOT},"placeholder.bmp");//not found, load placeholder instead
+                }
             }
             renderGuideLock.unlock();
             fflush(stdout);
@@ -321,8 +327,7 @@ private:
         if(growORcut==1)//move snake head
         {
             snake.emplace_front(p);
-            nextRefreshGuide->push(refreshSlot{snakeHead,p});
-            nextRefreshGuide->push(refreshSlot{snakeBody,pos {(snake.begin()+1)->x,(snake.begin()+1)->y}});//set old head as body
+            nextRefreshGuide->push(refreshSlot{snakeHead,p});            nextRefreshGuide->push(refreshSlot{snakeBody,pos {(snake.begin()+1)->x,(snake.begin()+1)->y}});//set old head as body
         }
         if(growORcut==-1)//cut snake tail
         {
