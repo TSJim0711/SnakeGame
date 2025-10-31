@@ -19,13 +19,15 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include<linux/input.h>
+
 using namespace std;
 
 #define FRAME_RATE 30
 
 #define SCREEN_SIZE_X 800
 #define SCREEN_SIZE_Y 480
-#define GAME_BOARD_SIZE_X 26
+#define GAME_BOARD_SIZE_X 27
 #define GAME_BOARD_SIZE_Y 16
 #define PIXEL_PER_SLOT 30
 #define GLOBE_ASSET_STORE_LOC "./assets/"
@@ -46,10 +48,10 @@ struct zone
 };
 
 
-class screenOutput
+class ScreenOutput
 {
 public:
-    screenOutput()
+    ScreenOutput()
     {
         screenfd=open ("/dev/fb0",O_TRUNC | O_RDWR);
         if(screenfd>=0)
@@ -69,7 +71,7 @@ public:
         }   
     };
     
-    void updateScreen(pos ULpos, string assetName)
+    void updateScreen(pos ULpos, string assetName, int assetSize=PIXEL_PER_SLOT)
     {
         if(ULpos.x<0||ULpos.y<0)
             return;
@@ -77,11 +79,12 @@ public:
         assestBMP=fopen(assetLoc.c_str(),"r");
         if(assestBMP!=NULL)//make sure screen  and assest file is open
         {
-            for(int y=ULpos.y;y<ULpos.y+PIXEL_PER_SLOT;y++)
+            int byteEachRow=(assetSize*3+(4-(assetSize*3)%4));//pad to 4 byte
+            for(int y=ULpos.y;y<ULpos.y+assetSize;y++)
             {
-                fseek(assestBMP,54+((29-(y-ULpos.y))*92),SEEK_SET);//pad to 4 byte 90 ->92
+                fseek(assestBMP,54+((assetSize-1)-(y-ULpos.y))*byteEachRow,SEEK_SET);
                 memset(buffer,0,sizeof(buffer));
-                for(int x=0;x<PIXEL_PER_SLOT;x++)
+                for(int x=0;x<assetSize;x++)
                 {
                     fread(&midwayBGR,1,3,assestBMP);
                     screenMem[(y*800+ULpos.x+x)]=0x00<<24|midwayBGR[2]<<16|midwayBGR[1]<<8|midwayBGR[0];
@@ -91,7 +94,7 @@ public:
         fclose(assestBMP);
     }
 
-    ~screenOutput()
+    ~ScreenOutput()
     {
         if (screenfd!=-1)
         {
@@ -107,6 +110,45 @@ private:
     FILE* assestBMP=NULL;
     unsigned char midwayBGR[3], midwayA=0;//.bmp color
     unsigned char buffer[PIXEL_PER_SLOT*4]={};
+};
+
+class TouchScreen
+{
+public:
+    TouchScreen()
+    {
+        touchfd=open("/dev/input/event0",O_RDONLY);
+        if(touchfd==-1)
+            perror("touch fail");
+    }
+
+    pos getTouchPos()
+    {
+        struct input_event ts_event;
+        touchPos.x=-1;touchPos.y=-1;//defualt touch val == -1
+        while(1)//loop when got x but not y / got y but not x
+        {
+            read(touchfd,&ts_event,sizeof(struct input_event));
+            if(ts_event.type==EV_ABS)
+            {
+                if(ts_event.code==ABS_X)
+                    touchPos.x= ts_event.value*800/1024;
+                if(ts_event.code==ABS_Y)
+                    touchPos.y= ts_event.value*480/600;
+            }
+            if(ts_event.type==EV_SYN)//get sycn sign, make sure revieve all data
+                break;
+        }
+        return touchPos;
+    }
+
+    ~TouchScreen()
+    {
+        close(touchfd);
+    }
+private:
+    int touchfd;
+    pos touchPos;
 };
 
 bool playagainFlag;
@@ -153,8 +195,11 @@ public:
         placeProp(propReward);//init world
         placeBuild(buildWall,zone{pos{1,2},pos{GAME_BOARD_SIZE_X,2}});
         placeBuild(buildWall,zone{pos{GAME_BOARD_SIZE_X,2},pos{GAME_BOARD_SIZE_X,GAME_BOARD_SIZE_Y}});
-        placeBuild(buildWall,zone{pos{1,1},pos{1,GAME_BOARD_SIZE_Y}});
-        placeBuild(buildWall,zone{pos{1,GAME_BOARD_SIZE_Y},pos{GAME_BOARD_SIZE_X,GAME_BOARD_SIZE_Y}});
+        placeBuild(buildWall,zone{pos{1,1},pos{1,GAME_BOARD_SIZE_Y-7}});//place for placing d-pad
+        placeBuild(buildWall,zone{pos{1,GAME_BOARD_SIZE_Y-7},pos{8,GAME_BOARD_SIZE_Y-7}});
+        placeBuild(buildWall,zone{pos{8,GAME_BOARD_SIZE_Y-7},pos{8,GAME_BOARD_SIZE_Y}});
+        placeBuild(buildWall,zone{pos{8,GAME_BOARD_SIZE_Y},pos{GAME_BOARD_SIZE_X,GAME_BOARD_SIZE_Y}});
+        placeBuild(buildTranspWall,zone{pos{0,10},pos{7,GAME_BOARD_SIZE_Y}});//invisible
 
         thread thdSnakeLife(&SnakeGame::snakeLife,this);//snake move
         thread thdRender(&SnakeGame::render,this);//print on screen
@@ -211,9 +256,10 @@ public:
         new_settings = old_settings;
         new_settings.c_lflag &= ~(ICANON | ECHO);
         tcsetattr(STDIN_FILENO, TCSANOW, &new_settings);//set terminal to no echo
-        screenOutput classScreenOutput;
+        ScreenOutput classScreenOutput;
         system("clear");
         renderGuideLock.lock();
+        classScreenOutput.updateScreen(pos{(0)*PIXEL_PER_SLOT,(9)*PIXEL_PER_SLOT},"dPad.bmp",210);
         nextRefreshGuide->push(refreshSlot{'S',{1,1}});
         nextRefreshGuide->push(refreshSlot{'c',{2,1}});
         nextRefreshGuide->push(refreshSlot{'o',{3,1}});
@@ -234,12 +280,13 @@ public:
                 //printf("Bp1:%c\n",refreshing.cnt);
                 refreshing=curRefreshGuide->front();
                 curRefreshGuide->pop();
-                cout<<"\033["<<refreshing.p.y<<";"<<refreshing.p.x<<"H"<<(char)refreshing.cnt;//draw on terminal
+                //cout<<"\033["<<refreshing.p.y<<";"<<refreshing.p.x<<"H"<<(char)refreshing.cnt;//draw on terminal
                 assetsLoc=assetsMap.find(refreshing.cnt);//find assetsLocation from this map
                 if(assetsLoc!=assetsMap.end())//check if found
                 {
                     classScreenOutput.updateScreen(pos{(refreshing.p.x-1)*PIXEL_PER_SLOT,(refreshing.p.y-1)*PIXEL_PER_SLOT},assetsLoc->second);//not found, load placeholder instead
                 }
+                else if(refreshing.cnt==buildTranspWall) {}//don't print placeholder on tranparent wall, no placeholder as well
                 else
                 {
                     classScreenOutput.updateScreen(pos{(refreshing.p.x-1)*PIXEL_PER_SLOT,(refreshing.p.y-1)*PIXEL_PER_SLOT},"placeholder.bmp");//not found, load placeholder instead
@@ -256,35 +303,58 @@ public:
 
     void userControl()
     {
-        char inpt;
+        char inpt=1;
+        pos touchPos;
+        TouchScreen classTouchScreen;
+        zone upBtn={pos{65,260},pos{115,340}};
+        zone rightBtn={pos{115,340},pos{190,400}};
+        zone downBtn={pos{70,400},pos{115,470}};
+        zone leftBtn={pos{5,340},pos{65,400}};
         while (true)
         {
-            inpt=getchar();
+            //inpt=getchar();
+            touchPos=classTouchScreen.getTouchPos();
+            printf("{%d,%d}\n",touchPos.x,touchPos.y);
             snakeLock.lock();
-            if (inpt=='w' && curMoveDir!=MoveDown)
+            if ((upBtn.UL.x<=touchPos.x&&touchPos.x<=upBtn.DR.x&&upBtn.UL.y<=touchPos.y&&touchPos.y<=upBtn.DR.y) && curMoveDir!=MoveDown)
+            {
+                printf("up\n");
                 curMoveDir=MoveUp;
-            else if(inpt=='a'&& curMoveDir!=MoveRight)
+            }
+            else if((leftBtn.UL.x<=touchPos.x&&touchPos.x<=leftBtn.DR.x&&leftBtn.UL.y<=touchPos.y&&touchPos.y<=leftBtn.DR.y)&& curMoveDir!=MoveRight)
+            {
+                printf("left\n");
                 curMoveDir=MoveLeft;
-            else if(inpt=='s'&& curMoveDir!=MoveUp)
+            }
+            else if((downBtn.UL.x<=touchPos.x&&touchPos.x<=downBtn.DR.x&&downBtn.UL.y<=touchPos.y&&touchPos.y<=downBtn.DR.y)&& curMoveDir!=MoveUp)
                 curMoveDir=MoveDown;
-            else if(inpt=='d'&& curMoveDir!=MoveLeft)
+            else if((rightBtn.UL.x<=touchPos.x&&touchPos.x<=rightBtn.DR.x&&rightBtn.UL.y<=touchPos.y&&touchPos.y<=rightBtn.DR.y)&& curMoveDir!=MoveLeft)
                 curMoveDir=MoveRight;
             snakeLock.unlock();
 
-            if(gameActiveFlag==false)//game end, receive respond "wanna play again"
-            {  
-                if(inpt=='y'|| inpt=='Y')
-                {
-                    playagainFlag=true;
-                    break;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            if (inpt=='\033')//esc key
-                gameActiveFlag=false;
+            //if (inpt=='w' && curMoveDir!=MoveDown)
+            //    curMoveDir=MoveUp;
+            //else if(inpt=='a'&& curMoveDir!=MoveRight)
+            //    curMoveDir=MoveLeft;
+            //else if(inpt=='s'&& curMoveDir!=MoveUp)
+            //    curMoveDir=MoveDown;
+            //else if(inpt=='d'&& curMoveDir!=MoveLeft)
+            //    curMoveDir=MoveRight;
+
+            //if(gameActiveFlag==false)//game end, receive respond "wanna play again"
+            //{  
+            //    if(inpt=='y'|| inpt=='Y')
+            //    {
+            //        playagainFlag=true;
+            //        break;
+            //    }
+            //    else
+            //    {
+            //        break;
+            //    }
+            //}
+            //if (inpt=='\033')//esc key
+            //    gameActiveFlag=false;
         }
     }
 private:
@@ -294,7 +364,7 @@ private:
 
     enum prop {propAir=' ',propReward='*', propGreatReward='#', propConcerta='%'/*利他能 increase speed, increase score*/};    
     enum content {snakeGone=' ', snakeHead='H',snakeBody='B', snakeTail='T'};
-    enum mapBuild {buildWall='W', buildPortal='P'};
+    enum mapBuild {buildWall='W',buildTranspWall='/', buildPortal='P'};
     deque<pos> snake;
 
     struct refreshSlot
@@ -428,7 +498,7 @@ private:
         {
             if((snakePos.x>=buildingsIdx.z.UL.x&&snakePos.x<=buildingsIdx.z.DR.x) && (snakePos.y>=buildingsIdx.z.UL.y&&snakePos.y<=buildingsIdx.z.DR.y))//run into something?
             {
-                if(buildingsIdx.mb==buildWall)
+                if(buildingsIdx.mb==buildWall || buildingsIdx.mb==buildTranspWall)
                     return true;
                 if(buildingsIdx.mb==buildPortal)
                 {/*IDK how to achieve that, I should ask Yeshua or buddha?*/}
