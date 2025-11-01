@@ -27,14 +27,14 @@ using namespace std;
 
 #define SCREEN_SIZE_X 800
 #define SCREEN_SIZE_Y 480
-#define GAME_BOARD_SIZE_X 27
+#define GAME_BOARD_SIZE_X 26
 #define GAME_BOARD_SIZE_Y 16
 #define PIXEL_PER_SLOT 30
 #define GLOBE_ASSET_STORE_LOC "./assets/"
 
-#define GAME_START_POS_X 15
-#define GAME_START_POS_Y 3
-#define GAME_START_DIR MoveDown
+#define GAME_START_POS_X 16
+#define GAME_START_POS_Y 5
+#define GAME_START_DIR dirDown
 
 struct pos
 {
@@ -155,7 +155,7 @@ bool playagainFlag;
 class SnakeGame
 {
 public:
-    enum{MoveUp=-2,MoveDown=2,MoveRight=1,MoveLeft=-1}curMoveDir;
+    pos dirUp{0,-1},dirDown{0,1},dirRight{1,0},dirLeft{-1,0},curMoveDir;
 
     SnakeGame()
     {
@@ -213,8 +213,8 @@ public:
     void snakeLife()
     {
         //snake born
-        alterSnake(1,pos{GAME_START_POS_X-(abs(GAME_START_DIR)==1?GAME_START_DIR*2:0),GAME_START_POS_Y-(abs(GAME_START_DIR)==2?(GAME_START_DIR/10*2):0)});
-        alterSnake(1,pos{GAME_START_POS_X-(abs(GAME_START_DIR)==1?GAME_START_DIR*1:0),GAME_START_POS_Y-(abs(GAME_START_DIR)==2?(GAME_START_DIR/10*1):0)});
+        alterSnake(1,pos{GAME_START_POS_X-GAME_START_DIR.x*2,GAME_START_POS_Y-GAME_START_DIR.y*2});
+        alterSnake(1,pos{GAME_START_POS_X-GAME_START_DIR.x,GAME_START_POS_Y-GAME_START_DIR.y});
         alterSnake(1,pos{GAME_START_POS_X,GAME_START_POS_Y});
         curMoveDir=GAME_START_DIR;
 
@@ -223,7 +223,7 @@ public:
         while(gameActiveFlag)
         {
             snakeLock.lock();//lock to access snake deque and curmove
-            newStep={snake.front().x+(abs(curMoveDir)==1?curMoveDir:0),snake.front().y+(abs(curMoveDir)==2?((curMoveDir/2)):0)};
+            newStep={snake.front().x+curMoveDir.x,snake.front().y+curMoveDir.y};
             snakeLock.unlock();
             if(hit(newStep))
             {
@@ -280,7 +280,7 @@ public:
                 //printf("Bp1:%c\n",refreshing.cnt);
                 refreshing=curRefreshGuide->front();
                 curRefreshGuide->pop();
-                //cout<<"\033["<<refreshing.p.y<<";"<<refreshing.p.x<<"H"<<(char)refreshing.cnt;//draw on terminal
+                cout<<"\033["<<refreshing.p.y<<";"<<refreshing.p.x<<"H"<<(char)refreshing.cnt;//draw on terminal
                 assetsLoc=assetsMap.find(refreshing.cnt);//find assetsLocation from this map
                 if(assetsLoc!=assetsMap.end())//check if found
                 {
@@ -316,20 +316,14 @@ public:
             touchPos=classTouchScreen.getTouchPos();
             printf("{%d,%d}\n",touchPos.x,touchPos.y);
             snakeLock.lock();
-            if ((upBtn.UL.x<=touchPos.x&&touchPos.x<=upBtn.DR.x&&upBtn.UL.y<=touchPos.y&&touchPos.y<=upBtn.DR.y) && curMoveDir!=MoveDown)
-            {
-                printf("up\n");
-                curMoveDir=MoveUp;
-            }
-            else if((leftBtn.UL.x<=touchPos.x&&touchPos.x<=leftBtn.DR.x&&leftBtn.UL.y<=touchPos.y&&touchPos.y<=leftBtn.DR.y)&& curMoveDir!=MoveRight)
-            {
-                printf("left\n");
-                curMoveDir=MoveLeft;
-            }
-            else if((downBtn.UL.x<=touchPos.x&&touchPos.x<=downBtn.DR.x&&downBtn.UL.y<=touchPos.y&&touchPos.y<=downBtn.DR.y)&& curMoveDir!=MoveUp)
-                curMoveDir=MoveDown;
-            else if((rightBtn.UL.x<=touchPos.x&&touchPos.x<=rightBtn.DR.x&&rightBtn.UL.y<=touchPos.y&&touchPos.y<=rightBtn.DR.y)&& curMoveDir!=MoveLeft)
-                curMoveDir=MoveRight;
+            if ((upBtn.UL.x<=touchPos.x&&touchPos.x<=upBtn.DR.x&&upBtn.UL.y<=touchPos.y&&touchPos.y<=upBtn.DR.y) && (curMoveDir.x!=dirDown.x && curMoveDir.y!=dirDown.y))
+                curMoveDir=dirUp;
+            else if((leftBtn.UL.x<=touchPos.x&&touchPos.x<=leftBtn.DR.x&&leftBtn.UL.y<=touchPos.y&&touchPos.y<=leftBtn.DR.y)&& (curMoveDir.x!=dirRight.x && curMoveDir.y!=dirRight.y))
+                curMoveDir=dirLeft;
+            else if((downBtn.UL.x<=touchPos.x&&touchPos.x<=downBtn.DR.x&&downBtn.UL.y<=touchPos.y&&touchPos.y<=downBtn.DR.y)&& (curMoveDir.x!=dirUp.x && curMoveDir.y!=dirUp.y))
+                curMoveDir=dirDown;
+            else if((rightBtn.UL.x<=touchPos.x&&touchPos.x<=rightBtn.DR.x&&rightBtn.UL.y<=touchPos.y&&touchPos.y<=rightBtn.DR.y)&& (curMoveDir.x!=dirLeft.x && curMoveDir.y!=dirLeft.y))
+                curMoveDir=dirRight;
             snakeLock.unlock();
 
             //if (inpt=='w' && curMoveDir!=MoveDown)
